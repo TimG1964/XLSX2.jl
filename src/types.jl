@@ -42,30 +42,55 @@ struct CellRef
     column_number::Int
 end
 
+abstract type AbstractCellDataFormat end
+
+struct EmptyCellDataFormat <: AbstractCellDataFormat end
+
+# Keeps track of formatting information.
+struct CellDataFormat <: AbstractCellDataFormat
+    id::UInt
+end
+
 abstract type AbstractFormula end
 
 """
 A default formula simply storing the formula string.
 """
-struct Formula <: AbstractFormula
+mutable struct Formula <: AbstractFormula
     formula::String
+    unhandled::Union{Dict{String,String},Nothing}
 end
+function Formula()
+    return Formula("", nothing)
+end
+function Formula(s::String)
+    return Formula(s, nothing)
+end
+
 
 """
 The formula in this cell was defined somewhere else; we simply reference its ID.
 """
-struct FormulaReference <: AbstractFormula
+mutable struct FormulaReference <: AbstractFormula
     id::Int
+    unhandled::Union{Dict{String,String},Nothing}
 end
 
 """
-Formula that is defined once and referenced in all cells given by the cell range given in `ref`.
+Formula that is defined once and referenced in all cells given by the cell range given in `ref` and using the same `id`.
 """
-struct ReferencedFormula <: AbstractFormula
+mutable struct ReferencedFormula <: AbstractFormula
     formula::String
     id::Int
     ref::String # actually a CellRange, but defined later --> change if at some point we want to actively change formulae
+    unhandled::Union{Dict{String,String},Nothing}
 end
+
+struct CellFormula <: AbstractFormula
+    value::T where T<:AbstractFormula
+    styleid::AbstractCellDataFormat
+end
+
 
 mutable struct CellFont
     fontId::Int
@@ -138,12 +163,8 @@ struct EmptyCell <: AbstractCell
     ref::CellRef
 end
 
-abstract type AbstractCellDataFormat end
-
-struct EmptyCellDataFormat <: AbstractCellDataFormat end
-
-# Keeps track of formatting information.
-struct CellDataFormat <: AbstractCellDataFormat
+# Keeps track of conditional formatting information.
+struct DxFormat <: AbstractCellDataFormat
     id::UInt
 end
 
@@ -288,7 +309,13 @@ mutable struct SheetRowStreamIteratorState
     ht::Union{Float64, Nothing} # row height
 end
 
+mutable struct WorksheetCacheIteratorState
+    row_from_last_iteration::Int
+    full_cache::Bool # is the cache full (true) or does it need filling (false)
+end
+
 mutable struct WorksheetCache{I<:SheetRowIterator} <: SheetRowIterator
+    is_full::Bool # false until iterator runs to completion
     cells::CellCache # SheetRowNumber -> Dict{column_number, Cell}
     rows_in_cache::Vector{Int} # ordered vector with row numbers that are stored in cache
     row_ht::Dict{Int, Union{Float64, Nothing}} # Maps a row number to a row height
@@ -322,9 +349,11 @@ mutable struct Worksheet
     dimension::Union{Nothing, CellRange}
     is_hidden::Bool
     cache::Union{WorksheetCache, Nothing}
+    unhandled_attributes::Union{Nothing,Dict{Int,Dict{String,String}}}
+    sst_count::Int # number of cells containing a shared string
 
     function Worksheet(package::MSOfficePackage, sheetId::Int, relationship_id::String, name::String, dimension::Union{Nothing, CellRange}, is_hidden::Bool)
-        return new(package, sheetId, relationship_id, name, dimension, is_hidden, nothing)
+        return new(package, sheetId, relationship_id, name, dimension, is_hidden, nothing, nothing, 0)
     end
 end
 
@@ -332,13 +361,22 @@ struct SheetRowStreamIterator <: SheetRowIterator
     sheet::Worksheet
 end
 
+#------------------------------------------------------------------------------ sharedStrings
 mutable struct SharedStringTable
     unformatted_strings::Vector{String}
     formatted_strings::Vector{String}
     index::Dict{String, Int64} # for unformatted_strings search optimisation
     is_loaded::Bool # for lazy-loading of sst XML file (implies that this struct must be mutable)
 end
-
+struct SstToken
+    n::XML.LazyNode
+    idx::Int
+end
+struct Sst
+    unformatted::String
+    formatted::String
+    idx::Int
+end
 const DefinedNameValueTypes = Union{SheetCellRef, SheetCellRange, NonContiguousRange, Int, Float64, String, Missing}
 const DefinedNameRangeTypes = Union{SheetCellRef, SheetCellRange, NonContiguousRange}
 
@@ -348,7 +386,7 @@ struct DefinedNameValue
 end
 
 # Workbook is the result of parsing file `xl/workbook.xml`.
-# The `xl/workbook.xml` wi9ll need to be updated using the Workbook_names and 
+# The `xl/workbook.xml` will need to be updated using the Workbook_names and 
 # worksheet_names from here when a workbook is saved in case any new defined 
 # names have been created.
 mutable struct Workbook
@@ -385,7 +423,7 @@ mutable struct XLSXFile <: MSOfficePackage
     use_cache_for_sheet_data::Bool # indicates whether Worksheet.cache will be fed while reading worksheet cells.
     io::ZipArchives.ZipReader
     files::Dict{String, Bool} # maps filename => isread bool
-    data::Dict{String, XML.Node} # maps filename => XMLDocument
+    data::Dict{String, XML.Node} # maps filename => XMLDocument (with row/sst elements removed)
     binary_data::Dict{String, Vector{UInt8}} # maps filename => file content in bytes
     workbook::Workbook
     relationships::Vector{Relationship} # contains package level relationships
@@ -393,11 +431,22 @@ mutable struct XLSXFile <: MSOfficePackage
 
     function XLSXFile(source::Union{AbstractString, IO}, use_cache::Bool, is_writable::Bool)
         check_for_xlsx_file_format(source)
-        io = ZipArchives.ZipReader(read(source))
+        if use_cache || (source isa IO)
+            io = ZipArchives.ZipReader(read(source))
+        else
+            io = ZipArchives.ZipReader(FileArray(abspath(source)))
+        end
         xl = new(source, use_cache, io, Dict{String, Bool}(), Dict{String, XML.Node}(), Dict{String, Vector{UInt8}}(), EmptyWorkbook(), Vector{Relationship}(), is_writable)
         xl.workbook.package = xl
         return xl
     end
+end
+
+struct ReadFile
+    node::Union{Nothing,XML.Node}
+    raw::Union{Nothing,XML.Raw}
+    bin::Union{Nothing,Vector{UInt8}}
+    name::String
 end
 
 #
@@ -455,6 +504,8 @@ struct TableRowIteratorState{S}
     table_row_index::Int
     sheet_row_index::Int
     sheet_row_iterator_state::S
+    missing_rows::Int # number of completely empty rows between the last row and the current row
+    row_pending::Union{Nothing, SheetRow} # if the last row was empty, this is the row that was pending to be returned
 end
 
 struct DataTable
@@ -496,3 +547,9 @@ struct XLSXError <: Exception
     msg::String
 end
 Base.showerror(io::IO, e::XLSXError) = print(io, "XLSXError: ",e.msg)
+
+struct FileArray <: AbstractVector{UInt8}
+    filename::String
+    offset::Int64
+    len::Int64
+end

@@ -62,6 +62,23 @@ Base.:(==)(c1::CellRef, c2::CellRef) = c1.name == c2.name
 Base.hash(c::CellRef) = hash(c.name)
 Base.isless(c1::CellRef, c2::CellRef) = Base.isless(string(c1), string(c2))
 
+Base.:(==)(rf1::ReferencedFormula, rf2::ReferencedFormula) = (
+    rf1.formula == rf2.formula &&
+    rf1.id == rf2.id &&
+    rf1.ref == rf2.ref &&
+    rf1.unhandled == rf2.unhandled
+)
+
+Base.:(==)(rf1::FormulaReference, rf2::FormulaReference) = (
+    rf1.id == rf2.id &&
+    rf1.unhandled == rf2.unhandled
+)
+
+Base.:(==)(rf1::Formula, rf2::Formula) = (
+    rf1.formula == rf2.formula &&
+    rf1.unhandled == rf2.unhandled
+)
+
 const RGX_COLUMN_NAME = r"^[A-Z]?[A-Z]?[A-Z]$"
 const RGX_ROW_NAME = r"^[1-9][0-9]*$"
 const RGX_CELLNAME = r"^[A-Z]+[0-9]+$"
@@ -190,7 +207,7 @@ CellRange(start_row::Integer, start_column::Integer, stop_row::Integer, stop_col
 
 Base.string(cr::CellRange) = string(cr.start)*":"*string(cr.stop)
 Base.show(io::IO, cr::CellRange) = print(io, string(cr))
-Base.:(==)(cr1::CellRange, cr2::CellRange) = cr1.start == cr2.start && cr2.stop == cr2.stop
+Base.:(==)(cr1::CellRange, cr2::CellRange) = cr1.start == cr2.start && cr1.stop == cr2.stop
 Base.hash(cr::CellRange) = hash(cr.start) + hash(cr.stop)
 Base.isless(cr1::CellRange, cr2::CellRange) = Base.isless(string(cr1), string(cr2)) # needed for tests
 
@@ -508,16 +525,25 @@ function nc_bounds(r::NonContiguousRange)::CellRange # Smallest rectangualar `Ce
     end
     return CellRange(CellRef(top, left), CellRef(bottom, right))
 end
-function Base.length(r::NonContiguousRange)::Int # Number of cells in `r`.
-    s = 0
+function Base.length(r::NonContiguousRange)::Int # Number of cells in `r`, eliminating duplicates.
+#    s = 0
+    allcells= Vector{String}()
     for rng in r.rng
         if rng isa CellRef
-            s += 1
+            push!(allcells, rng.name)
         else
-            s += length(rng)
+            for cell in rng
+                push!(allcells, cell.name)
+            end
         end
     end
-    return s
+#        if rng isa CellRef
+#            s += 1
+#        else
+#            s += length(rng)
+#        end
+#    end
+    return length(unique(allcells))
 end
 
 const RGX_SHEET_CELLNAME = r"^.+![A-Z]+[0-9]+$"

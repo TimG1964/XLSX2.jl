@@ -62,11 +62,12 @@ function Cell(c::XML.LazyNode)
 
     # iterate v and f elements
     local v::String = ""
-    local f::AbstractFormula = Formula("")
+    local f::AbstractFormula = Formula()
     local found_v::Bool = false
     local found_f::Bool = false
 
     for c_child_element in XML.children(c)
+
         if t == "inlineStr"
             if XML.tag(c_child_element) == "is"
                 t_node = find_t_node_recursively(c_child_element)
@@ -84,25 +85,20 @@ function Cell(c::XML.LazyNode)
 
         else
             if XML.tag(c_child_element) == "v"
-
-                # we should have only one v element
-                if found_v
+                if found_v # we should have only one v element
                     throw(XLSXError("Unsupported: cell $(ref) has more than 1 `v` elements."))
                 else
                     found_v = true
-                end
-                
-                v = XML.unescape(XML.simple_value(c_child_element))
-
+                end              
+                # v = length(c_child_element)==0 ? "" : XML.unescape(XML.simple_value(c_child_element))
+                ch=XML.children(c_child_element)
+                v = length(ch)==0 ? "" : XML.unescape(XML.value(ch[1])) # saves a little time!
             elseif XML.tag(c_child_element) == "f"
-
-                # we should have only one f element
-                if found_f
+                if found_f # we should have only one f element
                     throw(XLSXError("Unsupported: cell $(ref) has more than 1 `f` elements."))
                 else
                     found_f = true
                 end
-
                 f = parse_formula_from_element(c_child_element)
             end
         end
@@ -117,43 +113,46 @@ function parse_formula_from_element(c_child_element) :: AbstractFormula
     end
 
     if XML.is_simple(c_child_element)
-        formula_string = XML.simple_value(c_child_element)
+        formula_string = XML.unescape(XML.simple_value(c_child_element))
     else
         fs = [x for x in XML.children(c_child_element) if XML.nodetype(x) == XML.Text]
         if length(fs)==0
             formula_string=""
         else
-            formula_string=XML.value(fs[1])
+            formula_string=XML.unescape(XML.value(fs[1]))
         end
     end
 
     a = XML.attributes(c_child_element)
-
+    unhandled_attributes=Dict{String,String}()
     if !isnothing(a)
-
-        if haskey(a, "ref") && haskey(a, "t") && a["t"] == "shared"
-
+        for (k, v) in a
+            if k ∉ ["t", "si", "ref"]
+                push!(unhandled_attributes, k => v)
+            end
+        end
+    end
+    if !isnothing(a)
+        if haskey(a, "t") && a["t"] == "shared"
             haskey(a, "si") || throw(XLSXError("Expected shared formula to have an index. `si` attribute is missing: $c_child_element"))
-
-            return ReferencedFormula(
-                formula_string,
-                parse(Int, a["si"]),
-                a["ref"],
-            )
-
-        elseif haskey(a, "t") && a["t"] == "shared"
-
-            haskey(a, "si") || throw(XLSXError("Expected shared formula to have an index. `si` attribute is missing: $c_child_element"))
-
-            return FormulaReference(
-                parse(Int, a["si"]),
-            )
+            if haskey(a, "ref")
+                return ReferencedFormula(
+                    formula_string,
+                    parse(Int, a["si"]),
+                    a["ref"],
+                    length(unhandled_attributes) > 0 ? unhandled_attributes : nothing,
+                )
+            else
+                return FormulaReference(
+                    parse(Int, a["si"]),
+                    length(unhandled_attributes) > 0 ? unhandled_attributes : nothing,
+                )
+            end
         end
     end
 
-    return Formula(formula_string)
+    return Formula(formula_string, length(unhandled_attributes) > 0 ? unhandled_attributes : nothing)
 end
-
 
 # Constructor with simple formula string for backward compatibility
 function Cell(ref::CellRef, datatype::String, style::String, value::String, formula::String)
@@ -185,9 +184,13 @@ function getdata(ws::Worksheet, cell::Cell) :: CellValueType
         return missing
     end
 
+    ecv=isempty(cell.value)
+    ecd=isempty(cell.datatype)
+    ecs=isempty(cell.style)
+
     if cell.datatype == "inlineStr"
 
-        if isempty(cell.value)
+        if ecv
             return missing
         else
             return cell.value
@@ -197,7 +200,7 @@ function getdata(ws::Worksheet, cell::Cell) :: CellValueType
 
     if cell.datatype == "s"
 
-        if isempty(cell.value)
+        if ecv
             return missing
         end
 
@@ -210,17 +213,17 @@ function getdata(ws::Worksheet, cell::Cell) :: CellValueType
             return str
         end
 
-    elseif (isempty(cell.datatype) || cell.datatype == "n")
+    elseif (ecd || cell.datatype == "n")
 
-        if isempty(cell.value)
+        if ecv
             return missing
         end
 
-        if !isempty(cell.style) && styles_is_datetime(ws, cell.style)
+        if !ecs && styles_is_datetime(ws, cell.style)
             # datetime
             return _celldata_datetime(cell.value, isdate1904(ws))
 
-        elseif !isempty(cell.style) && styles_is_float(ws, cell.style)
+        elseif !ecs && styles_is_float(ws, cell.style)
             # float
             return parse(Float64, cell.value)
 
@@ -244,7 +247,7 @@ function getdata(ws::Worksheet, cell::Cell) :: CellValueType
         end
     elseif cell.datatype == "str"
         # plain string
-        if isempty(cell.value)
+        if ecv
             return missing
         else
             return cell.value
@@ -317,7 +320,7 @@ end
 # See also XLSX.isdate1904.
 function excel_value_to_datetime(x::Float64, _is_date_1904::Bool) :: Dates.DateTime
     if x < 0
-        throw(XLSXError("Cannot have a datetime value < 0. Got $XML"))
+        throw(XLSXError("Cannot have a datetime value < 0. Got $x"))
     end
 
     local dt::Dates.Date

@@ -126,11 +126,13 @@ function setFont(sh::Worksheet, cellref::CellRef;
         throw(XLSXError("Cannot set attribute for an `EmptyCell`: $(cellref.name). Set the value first."))
     end
 
+    allXfNodes=find_all_nodes("/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":styleSheet/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":cellXfs/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":xf", styles_xmlroot(wb))
+
     if cell.style == ""
-        cell.style = string(get_num_style_index(sh, 0).id)
+        cell.style = string(get_num_style_index(sh, allXfNodes, 0).id)
     end
 
-    cell_style = styles_cell_xf(wb, parse(Int, cell.style))
+    cell_style = styles_cell_xf(allXfNodes, parse(Int, cell.style))
 
     new_font_atts = Dict{String,Union{Dict{String,String},Nothing}}()
     cell_font = getFont(wb, cell_style)
@@ -192,7 +194,7 @@ function setFont(sh::Worksheet, cellref::CellRef;
 
     new_fontid = styles_add_cell_attribute(wb, font_node, "fonts")
 
-    newstyle = string(update_template_xf(sh, CellDataFormat(parse(Int, cell.style)), ["fontId", "applyFont"], [string(new_fontid), "1"]).id)
+    newstyle = string(update_template_xf(sh, allXfNodes, CellDataFormat(parse(Int, cell.style)), ["fontId", "applyFont"], [string(new_fontid), "1"]).id)
     cell.style = newstyle
     return new_fontid
 end
@@ -339,7 +341,7 @@ function getFont(wb::Workbook, cell_style::XML.Node)::Union{Nothing,CellFont}
         fontid = cell_style["fontId"]
         applyfont = haskey(cell_style, "applyFont") ? cell_style["applyFont"] : "0"
         xroot = styles_xmlroot(wb)
-        font_elements = find_all_nodes("/"*SPREADSHEET_NAMESPACE_XPATH_ARG*":styleSheet/"*SPREADSHEET_NAMESPACE_XPATH_ARG*":fonts", xroot)[begin]
+        font_elements = find_all_nodes("/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":styleSheet/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":fonts", xroot)[begin]
         if parse(Int, font_elements["count"]) != length(XML.children(font_elements))
             throw(XLSXError("Unexpected number of font definitions found : $(length(XML.children(font_elements))). Expected $(parse(Int, font_elements["count"]))"))
         end
@@ -444,7 +446,7 @@ function getBorder(wb::Workbook, cell_style::XML.Node)::Union{Nothing,CellBorder
         borderid = cell_style["borderId"]
         applyborder = haskey(cell_style, "applyBorder") ? cell_style["applyBorder"] : "0"
         xroot = styles_xmlroot(wb)
-        border_elements = find_all_nodes("/"*SPREADSHEET_NAMESPACE_XPATH_ARG*":styleSheet/"*SPREADSHEET_NAMESPACE_XPATH_ARG*":borders", xroot)[begin]
+        border_elements = find_all_nodes("/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":styleSheet/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":borders", xroot)[begin]
         if parse(Int, border_elements["count"]) != length(XML.children(border_elements))
             throw(XLSXError("Unexpected number of border definitions found : $(length(XML.children(border_elements))). Expected $(parse(Int, border_elements["count"]))"))
         end
@@ -539,7 +541,7 @@ Allowed values for `style` are:
 - `slantDashDot`
 
 The `color` attribute can be set by specifying an 8-digit hexadecimal value 
-in the format "AARRGGBB". The transparency ("AA") is ignored by Excel but 
+in the format "FFRRGGBB". The transparency ("FF") is ignored by Excel but 
 is required.
 Alternatively, you can use the name of any named color from Colors.jl
 ([here](https://juliagraphics.github.io/Colors.jl/stable/namedcolors/)).
@@ -682,6 +684,13 @@ function setBorder(sh::Worksheet, cellref::CellRef;
         throw(XLSXError("Cannot set borders because cache is not enabled."))
     end
 
+    if !isnothing(allsides)
+        if !all(isnothing, [left, right, top, bottom])
+            throw(XLSXError("Keyword `allsides` is incompatible with any other keywords except `diagonal`."))
+        end
+        return setBorder(sh, cellref; left=allsides, right=allsides, top=allsides, bottom=allsides, diagonal=diagonal)
+    end
+
     kwdict = Dict{String,Union{Dict{String,String},Nothing}}()
     kwdict["allsides"] = isnothing(allsides) ? nothing : Dict{String,String}(p for p in allsides)
     kwdict["left"] = isnothing(left) ? nothing : Dict{String,String}(p for p in left)
@@ -690,13 +699,6 @@ function setBorder(sh::Worksheet, cellref::CellRef;
     kwdict["bottom"] = isnothing(bottom) ? nothing : Dict{String,String}(p for p in bottom)
     kwdict["diagonal"] = isnothing(diagonal) ? nothing : Dict{String,String}(p for p in diagonal)
 
-    if !isnothing(allsides)
-        if !all(isnothing, [left, right, top, bottom])
-            throw(XLSXError("Keyword `allsides` is incompatible with any other keywords except `diagonal`."))
-        end
-        return setBorder(sh, cellref; left=allsides, right=allsides, top=allsides, bottom=allsides, diagonal=diagonal)
-    end
-
     wb = get_workbook(sh)
     cell = getcell(sh, cellref)
 
@@ -704,11 +706,13 @@ function setBorder(sh::Worksheet, cellref::CellRef;
         throw(XLSXError("Cannot set border for an `EmptyCell`: $(cellref.name). Set the value first."))
     end
 
+    allXfNodes=find_all_nodes("/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":styleSheet/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":cellXfs/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":xf", styles_xmlroot(wb))
+
     if cell.style == ""
-        cell.style = string(get_num_style_index(sh, 0).id)
+        cell.style = string(get_num_style_index(sh, allXfNodes, 0).id)
     end
 
-    cell_style = styles_cell_xf(wb, parse(Int, cell.style))
+    cell_style = styles_cell_xf(allXfNodes, parse(Int, cell.style))
     new_border_atts = Dict{String,Union{Dict{String,String},Nothing}}()
 
     cell_borders = getBorder(wb, cell_style)
@@ -763,7 +767,7 @@ function setBorder(sh::Worksheet, cellref::CellRef;
 
     new_borderid = styles_add_cell_attribute(wb, border_node, "borders")
 
-    newstyle = string(update_template_xf(sh, CellDataFormat(parse(Int, cell.style)), ["borderId", "applyBorder"], [string(new_borderid), "1"]).id)
+    newstyle = string(update_template_xf(sh, allXfNodes, CellDataFormat(parse(Int, cell.style)), ["borderId", "applyBorder"], [string(new_borderid), "1"]).id)
     cell.style = newstyle
     return new_borderid
 end
@@ -903,7 +907,7 @@ function setOutsideBorder(ws::Worksheet, rng::CellRange;
         throw(XLSXError("Cannot set borders because cache is not enabled."))
     end
 
-#    length(rng) <= 1 && throw(XLSXError("Cannot set outside border for a single cell."))
+    #    length(rng) <= 1 && throw(XLSXError("Cannot set outside border for a single cell."))
 
     kwdict = Dict{String,Union{Dict{String,String},Nothing}}()
     kwdict["outside"] = Dict{String,String}(p for p in outside)
@@ -1021,7 +1025,7 @@ function getFill(wb::Workbook, cell_style::XML.Node)::Union{Nothing,CellFill}
         fillid = cell_style["fillId"]
         applyfill = haskey(cell_style, "applyFill") ? cell_style["applyFill"] : "0"
         xroot = styles_xmlroot(wb)
-        fill_elements = find_all_nodes("/"*SPREADSHEET_NAMESPACE_XPATH_ARG*":styleSheet/"*SPREADSHEET_NAMESPACE_XPATH_ARG*":fills", xroot)[begin]
+        fill_elements = find_all_nodes("/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":styleSheet/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":fills", xroot)[begin]
         if parse(Int, fill_elements["count"]) != length(XML.children(fill_elements))
             throw(XLSXError("Unexpected number of font definitions found : $(length(XML.children(fill_elements))). Expected $(parse(Int, fill_elements["count"]))"))
         end
@@ -1160,11 +1164,13 @@ function setFill(sh::Worksheet, cellref::CellRef;
         throw(XLSXError("Cannot set fill for an `EmptyCell`: $(cellref.name). Set the value first."))
     end
 
+    allXfNodes=find_all_nodes("/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":styleSheet/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":cellXfs/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":xf", styles_xmlroot(wb))
+
     if cell.style == ""
-        cell.style = string(get_num_style_index(sh, 0).id)
+        cell.style = string(get_num_style_index(sh, allXfNodes, 0).id)
     end
 
-    cell_style = styles_cell_xf(wb, parse(Int, cell.style))
+    cell_style = styles_cell_xf(allXfNodes, parse(Int, cell.style))
 
     new_fill_atts = Dict{String,Union{Dict{String,String},Nothing}}()
     patternFill = Dict{String,String}()
@@ -1178,6 +1184,9 @@ function setFill(sh::Worksheet, cellref::CellRef;
             if isnothing(pattern) && haskey(old_fill_atts, "patternType")
                 patternFill["patternType"] = old_fill_atts["patternType"]
             elseif !isnothing(pattern)
+                if pattern ∉ ["none", "solid", "mediumGray", "darkGray", "lightGray", "darkHorizontal", "darkVertical", "darkDown", "darkUp", "darkGrid", "darkTrellis", "lightHorizontal", "lightVertical", "lightDown", "lightUp", "lightGrid", "lightTrellis", "gray125", "gray0625"]
+                    throw(XLSXError("Invalid style: $pattern. Must be one of: `none`, `solid`, `mediumGray`, `darkGray`, `lightGray`, `darkHorizontal`, `darkVertical`, `darkDown`, `darkUp`, `darkGrid`, `darkTrellis`, `lightHorizontal`, `lightVertical`, `lightDown`, `lightUp`, `lightGrid`, `lightTrellis`, `gray125`, `gray0625`."))
+                end
                 patternFill["patternType"] = pattern
             end
         elseif a == "fg"
@@ -1208,7 +1217,7 @@ function setFill(sh::Worksheet, cellref::CellRef;
 
     new_fillid = styles_add_cell_attribute(wb, fill_node, "fills")
 
-    newstyle = string(update_template_xf(sh, CellDataFormat(parse(Int, cell.style)), ["fillId", "applyFill"], [string(new_fillid), "1"]).id)
+    newstyle = string(update_template_xf(sh, allXfNodes, CellDataFormat(parse(Int, cell.style)), ["fillId", "applyFill"], [string(new_fillid), "1"]).id)
     cell.style = newstyle
     return new_fillid
 end
@@ -1463,14 +1472,16 @@ function setAlignment(sh::Worksheet, cellref::CellRef;
     cell = getcell(sh, cellref)
 
     if cell isa EmptyCell
-        throw(XLSXError("Cannot set fill for an `EmptyCell`: $(cellref.name). Set the value first."))
+        throw(XLSXError("Cannot set alignment for an `EmptyCell`: $(cellref.name). Set the value first."))
     end
+
+    allXfNodes=find_all_nodes("/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":styleSheet/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":cellXfs/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":xf", styles_xmlroot(wb))
 
     if cell.style == ""
-        cell.style = string(get_num_style_index(sh, 0).id)
+        cell.style = string(get_num_style_index(sh, allXfNodes, 0).id)
     end
 
-    cell_style = styles_cell_xf(wb, parse(Int, cell.style))
+    cell_style = styles_cell_xf(allXfNodes, parse(Int, cell.style))
 
     atts = XML.OrderedDict{String,String}()
     cell_alignment = getAlignment(wb, cell_style)
@@ -1520,7 +1531,7 @@ function setAlignment(sh::Worksheet, cellref::CellRef;
 
     alignment_node = XML.Node(XML.Element, "alignment", atts, nothing, nothing)
 
-    newstyle = string(update_template_xf(sh, CellDataFormat(parse(Int, cell.style)), alignment_node).id)
+    newstyle = string(update_template_xf(sh, allXfNodes, CellDataFormat(parse(Int, cell.style)), alignment_node).id)
     cell.style = newstyle
 
     return parse(Int, newstyle)
@@ -1650,11 +1661,11 @@ function getFormat(wb::Workbook, cell_style::XML.Node)::Union{Nothing,CellFormat
         format_atts = Dict{String,Union{Dict{String,String},Nothing}}()
         if parse(Int, numfmtid) >= PREDEFINED_NUMFMT_COUNT
             xroot = styles_xmlroot(wb)
-            format_elements = find_all_nodes("/"*SPREADSHEET_NAMESPACE_XPATH_ARG*":styleSheet/"*SPREADSHEET_NAMESPACE_XPATH_ARG*":numFmts", xroot)[begin]
+            format_elements = find_all_nodes("/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":styleSheet/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":numFmts", xroot)[begin]
             if parse(Int, format_elements["count"]) != length(XML.children(format_elements))
                 throw(XLSXError("Unexpected number of format definitions found : $(length(XML.children(format_elements))). Expected $(parse(Int, format_elements["count"]))"))
             end
-            current_format = [x for x in XML.children(format_elements) if x["numFmtId"]==numfmtid][1]
+            current_format = [x for x in XML.children(format_elements) if x["numFmtId"] == numfmtid][1]
             if length(XML.attributes(current_format)) != 2
                 throw(XLSXError("Wrong number of attributes found for $(XML.tag(current_format)) Expected 2, found $(length(XML.attributes(current_format)))."))
             end
@@ -1682,10 +1693,10 @@ end
     
     setFormat(sh::Worksheet, row, col; kw...) -> ::Int
    
-Set the format used used by a single cell, a cell range, a column range or 
-row range or a named cell or named range in a worksheet or XLSXfile.
-Alternatively, specify the row and column using any combination of 
-Integer, UnitRange, Vector{Integer} or `:`.
+Set the number format used used by a single cell, a cell range, a column 
+range or row range or a named cell or named range in a worksheet or 
+XLSXfile. Alternatively, specify the row and column using any combination 
+of Integer, UnitRange, Vector{Integer} or `:`.
 
 The function uses one keyword used to define a format:
 - `format::String = nothing` : Defines a built-in or custom number format
@@ -1760,11 +1771,13 @@ function setFormat(sh::Worksheet, cellref::CellRef;
         throw(XLSXError("Cannot set format for an `EmptyCell`: $(cellref.name). Set the value first."))
     end
 
+    allXfNodes=find_all_nodes("/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":styleSheet/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":cellXfs/" * SPREADSHEET_NAMESPACE_XPATH_ARG * ":xf", styles_xmlroot(wb))
+
     if cell.style == ""
-        cell.style = string(get_num_style_index(sh, 0).id)
+        cell.style = string(get_num_style_index(sh, allXfNodes, 0).id)
     end
 
-    cell_style = styles_cell_xf(wb, parse(Int, cell.style))
+    cell_style = styles_cell_xf(allXfNodes, parse(Int, cell.style))
 
     #    new_format_atts = Dict{String,Union{Dict{String,String},Nothing}}()
     new_format = XML.OrderedDict{String,String}()
@@ -1777,33 +1790,7 @@ function setFormat(sh::Worksheet, cellref::CellRef;
         return cell_format.numFmtId
     end
 
-    if haskey(builtinFormatNames, uppercasefirst(format)) # User specified a format by name
-        new_formatid = builtinFormatNames[format]
-    else                                      # user specified a format code
-        code = lowercase(format)
-        code = remove_formatting(code)
-        if !occursin(floatformats, code) && !any(map(x -> occursin(x, code), DATETIME_CODES))
-            throw(XLSXError("Specified format is not a valid numFmt: $format"))
-        end
-
-        xroot = styles_xmlroot(wb)
-        i, j = get_idces(xroot, "styleSheet", "numFmts")
-        if isnothing(j) # There are no existing custom formats
-            new_formatid = styles_add_numFmt(wb, format)
-        else
-            existing_elements_count = length(XML.children(xroot[i][j]))
-            if parse(Int, xroot[i][j]["count"]) != existing_elements_count
-                throw(XLSXError("Wrong number of font elements found: $existing_elements_count. Expected $(parse(Int, xroot[i][j]["count"]))."))
-            end
-
-            format_node = XML.Element("numFmt";
-                numFmtId=string(existing_elements_count + PREDEFINED_NUMFMT_COUNT),
-                formatCode=XML.escape(format)
-            )
-
-            new_formatid = styles_add_cell_attribute(wb, format_node, "numFmts") + PREDEFINED_NUMFMT_COUNT
-        end
-    end
+    new_formatid = get_new_formatId(wb, format)
 
     if new_formatid == 0
         atts = ["numFmtId"]
@@ -1812,7 +1799,7 @@ function setFormat(sh::Worksheet, cellref::CellRef;
         atts = ["numFmtId", "applyNumberFormat"]
         vals = [string(new_formatid), "1"]
     end
-    newstyle = string(update_template_xf(sh, CellDataFormat(parse(Int, cell.style)), atts, vals).id)
+    newstyle = string(update_template_xf(sh, allXfNodes, CellDataFormat(parse(Int, cell.style)), atts, vals).id)
     cell.style = newstyle
 
     return new_formatid
@@ -1944,6 +1931,7 @@ function setUniformStyle(ws::Worksheet, rng::CellRange)::Union{Nothing,Int}
 
     let newid::Union{Nothing,Int},
         newid = nothing
+
         first = true
 
         for cellref in rng
@@ -2045,7 +2033,7 @@ function setColumnWidth(ws::Worksheet, rng::CellRange; width::Union{Nothing,Real
         return 0
     end
 
-    sheetdoc = xmlroot(ws.package, "xl/worksheets/sheet"*string(ws.sheetId)*".xml") # find the <cols> block in the worksheet's xml file
+    sheetdoc = xmlroot(ws.package, "xl/worksheets/sheet" * string(ws.sheetId) * ".xml") # find the <cols> block in the worksheet's xml file
     i, j = get_idces(sheetdoc, "worksheet", "cols")
 
     if isnothing(j) # There are no existing column formats. Insert before the <sheetData> block and push everything else down one.
@@ -2139,7 +2127,7 @@ function getColumnWidth(ws::Worksheet, cellref::CellRef)::Union{Nothing,Real}
         throw(XLSXError("Cell specified is outside sheet dimension `$d`"))
     end
 
-    sheetdoc = xmlroot(ws.package, "xl/worksheets/sheet"*string(ws.sheetId)*".xml") # find the <cols> block in the worksheet's xml file
+    sheetdoc = xmlroot(ws.package, "xl/worksheets/sheet" * string(ws.sheetId) * ".xml") # find the <cols> block in the worksheet's xml file
     i, j = get_idces(sheetdoc, "worksheet", "cols")
 
     if isnothing(j) # There are no existing column formats defined.
@@ -2246,20 +2234,24 @@ function setRowHeight(ws::Worksheet, rng::CellRange; height::Union{Nothing,Real}
     if isnothing(height) # No-op
         return 0
     end
-    first = true
-    for r in eachrow(ws)
-        if r.row in top:bottom
-            if haskey(ws.cache.row_ht, r.row)
-                ws.cache.row_ht[r.row] = padded_height
-                first = false
-            end
 
+    if isnothing(ws.cache) || !haskey(ws.cache.row_ht, rng.stop.row_number)
+        _ = ws[rng.stop] # Ensure cache filled at least to include the last row in `rng`.
+    end
+
+    first = true
+
+    for r in top:bottom
+        if haskey(ws.cache.row_ht, r) # may still be missing if row is entirely empty.
+            ws.cache.row_ht[r] = padded_height
+            first=false
         end
     end
 
     if first == true
         return -1
     end
+
     return 0
 
 end
@@ -2306,13 +2298,12 @@ function getRowHeight(ws::Worksheet, cellref::CellRef)::Union{Nothing,Real}
         throw(XLSXError("Cell specified is outside sheet dimension `$d`"))
     end
 
-    for r in eachrow(ws)
-        if r.row == cellref.row_number
-            if haskey(ws.cache.row_ht, r.row)
-                return ws.cache.row_ht[r.row]
-            end
+    if isnothing(ws.cache) || !haskey(ws.cache.row_ht, cellref.row_number)
+        _ = ws[cellref] # Ensure cache filled at least to include the last row in `rng`.
+    end
 
-        end
+    if haskey(ws.cache.row_ht, cellref.row_number) # Row might still be empty
+        return ws.cache.row_ht[cellref.row_number]
     end
 
     return -1 # Row specified not found (is empty)
@@ -2359,7 +2350,7 @@ function getMergedCells(ws::Worksheet)::Union{Vector{CellRange},Nothing}
         throw(XLSXError("Cannot get merged cells because cache is not enabled."))
     end
 
-    sheetdoc = xmlroot(ws.package, "xl/worksheets/sheet"*string(ws.sheetId)*".xml") # find the <mergeCells> block in the worksheet's xml file
+    sheetdoc = xmlroot(ws.package, "xl/worksheets/sheet" * string(ws.sheetId) * ".xml") # find the <mergeCells> block in the worksheet's xml file
     i, j = get_idces(sheetdoc, "worksheet", "mergeCells")
 
     if isnothing(j) # There are no existing merged cells.
@@ -2538,6 +2529,10 @@ The specified range must not overlap with any previously merged cells.
 
 It is not possible to merge a single cell!
 
+A non-contiguous range composed of multiple cell ranges will be processed as a 
+list of separate ranges. Each range will be merged separately. No range within 
+a non-contiguous range may be a single cell.
+
 The Excel file must be opened in write mode to work with merged cells.
 
 # Examples:
@@ -2556,7 +2551,7 @@ mergeCells(ws::Worksheet, rng::SheetColumnRange) = do_sheet_names_match(ws, rng)
 mergeCells(ws::Worksheet, rng::SheetRowRange) = do_sheet_names_match(ws, rng) && mergeCells(ws, rng.rowrng)
 mergeCells(ws::Worksheet, colrng::ColumnRange)::Int = process_columnranges(mergeCells, ws, colrng)
 mergeCells(ws::Worksheet, rowrng::RowRange)::Int = process_rowranges(mergeCells, ws, rowrng)
-#mergeCells(ws::Worksheet, ncrng::NonContiguousRange; kw...)::Int = process_ncranges(mergeCells, ws, ncrng; kw...)
+mergeCells(ws::Worksheet, ncrng::NonContiguousRange; kw...)::Int = process_ncranges(mergeCells, ws, ncrng; kw...)
 mergeCells(xl::XLSXFile, sheetcell::AbstractString)::Int = process_sheetcell(mergeCells, xl, sheetcell)
 mergeCells(ws::Worksheet, ref_or_rng::AbstractString)::Int = process_ranges(mergeCells, ws, ref_or_rng)
 mergeCells(ws::Worksheet, row::Union{Integer,UnitRange{<:Integer}}, ::Colon) = process_colon(mergeCells, ws, row, nothing)
@@ -2567,7 +2562,7 @@ mergeCells(ws::Worksheet, row::Union{Integer,UnitRange{<:Integer}}, col::Union{I
 function mergeCells(ws::Worksheet, cr::CellRange)
     # May be better if merged cells were part of ws.cache?
 
-#    !is_valid_cell_range(cr) && throw(XLSXError("\"$cr\" is not a valid cell range."))
+    #    !is_valid_cell_range(cr) && throw(XLSXError("\"$cr\" is not a valid cell range."))
 
     !issubset(cr, get_dimension(ws)) && throw(XLSXError("Range `$cr` goes outside worksheet dimension."))
 
@@ -2581,7 +2576,7 @@ function mergeCells(ws::Worksheet, cr::CellRange)
         throw(XLSXError("Cannot get merged cells because cache is not enabled."))
     end
 
-    sheetdoc = xmlroot(ws.package, "xl/worksheets/sheet"*string(ws.sheetId)*".xml") # find the <mergeCells> block in the worksheet's xml file
+    sheetdoc = xmlroot(ws.package, "xl/worksheets/sheet" * string(ws.sheetId) * ".xml") # find the <mergeCells> block in the worksheet's xml file
     i, j = get_idces(sheetdoc, "worksheet", "mergeCells")
 
     if isnothing(j) # There are no existing merged cells. Insert immediately after the <sheetData> block and push everything else down one.
@@ -2590,7 +2585,7 @@ function mergeCells(ws::Worksheet, cr::CellRange)
         i != k && throw(XLSXError("Some problem here!"))
         if l != len
             push!(sheetdoc[k], sheetdoc[k][end])
-            if l+1 < len
+            if l + 1 < len
                 for pos = len-1:-1:l+1
                     sheetdoc[k][pos+1] = sheetdoc[k][pos]
                 end
@@ -2599,36 +2594,33 @@ function mergeCells(ws::Worksheet, cr::CellRange)
         else
             push!(sheetdoc[k], XML.Element("mergeCells"))
         end
-        j = l+1
-        count=0
+        j = l + 1
+        count = 0
     else # There are already some existing merged cells
-        c=XML.children(sheetdoc[i][j])
+        c = XML.children(sheetdoc[i][j])
         count = length(c)
         if count != parse(Int, sheetdoc[i][j]["count"])
             throw(XLSXError("Unexpected number of mergeCells found: $(length(c)). Expected $(sheetdoc[i][j]["count"])."))
         end
         for child in c
-#            for cell in cr
-#                if cell in CellRange(child["ref"])
-                if intersects(cr, CellRange(child["ref"]))
-                    throw(XLSXError("Merged range (`$cr`) cannot overlap with existing merged range (`"*child["ref"]*"`)."))
-                end
-#            end
+            if intersects(cr, CellRange(child["ref"]))
+                throw(XLSXError("Merged range (`$cr`) cannot overlap with existing merged range (`" * child["ref"] * "`)."))
+            end
         end
     end
 
     push!(sheetdoc[i][j], XML.Element("mergeCell", ref=string(cr))) # Add the new merged cell range.
-    count +=1
-    sheetdoc[i][j]["count"]=count
+    count += 1
+    sheetdoc[i][j]["count"] = count
 
     # All cells except the base cell are set to missing.
-    let first=true
+    let first = true
         for cell in cr
             if first
-                first=false
+                first = false
                 continue
             else
-                ws[cell]=""
+                ws[cell] = ""
             end
         end
     end

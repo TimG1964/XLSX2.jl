@@ -102,7 +102,7 @@ that implements [`Tables.jl`](https://github.com/JuliaData/Tables.jl) interface.
 You can use it to create a `DataFrame` from [DataFrames.jl](https://github.com/JuliaData/DataFrames.jl).
 Check the docstring for `gettable` method for more advanced options.
 
-There are also two helper methods [`XLSX.readtable`](@ref) and [`XLSX.readdf`](@ref) to read from file 
+There are also two helper methods [`XLSX.readtable`](@ref) and [`XLSX.readto`](@ref) to read from file 
 directly, as shown in the following examples.
 
 ```julia
@@ -117,7 +117,7 @@ julia> df = DataFrame(XLSX.readtable("myfile.xlsx", "mysheet")) # Returns a `Tab
    2 │       2  second
    3 │       3  third
 
-julia> df = XLSX.readdf("myfile.xlsx", "mysheet", DataFrame) # Returns a `DataFrame` directly.
+julia> df = XLSX.readto("myfile.xlsx", "mysheet", DataFrame) # Returns a `DataFrame` directly.
 3×2 DataFrame
  Row │ HeaderA  HeaderB 
      │ Int64    String  
@@ -198,8 +198,10 @@ The method `XLSX.openxlsx` has a `enable_cache` option to control worksheet cell
 Cache is enabled by default, so if you read a worksheet cell twice it will use the cached value instead of reading from disk
 in the second time.
 
-If `enable_cache=false`, worksheet cells will always be read from disk.
-This is useful when you want to read a spreadsheet that doesn't fit into memory.
+If `enable_cache=false`, worksheet cells will always be read from disk. In addition, if `enable_cache=false` 
+and `openxlsx` is used with do-syntax, the xlsx file itself will be opened usning `Mmap.mmap` so that the 
+zip archives themselves are not read into memory. This is useful when you want to read a spreadsheet that 
+doesn't fit into memory.
 
 The following example shows how you would read worksheet cells, one row at a time,
 where `myfile.xlsx` is a spreadsheet that doesn't fit into memory.
@@ -207,7 +209,7 @@ where `myfile.xlsx` is a spreadsheet that doesn't fit into memory.
 ```julia
 julia> XLSX.openxlsx("myfile.xlsx", enable_cache=false) do f
            sheet = f["mysheet"]
-           for r in eachrow(sheet)
+           for r in XLSX.eachrow(sheet)
               # r is a `SheetRow`, values are read using column references
               rn = XLSX.row_number(r) # `SheetRow` row number
               v1 = r[1]    # will read value at column 1
@@ -282,9 +284,9 @@ end
 
 !!! warning
 
-    The `read-write` mode is known to produce some data loss. See [#159](https://github.com/felipenoris/XLSX.jl/issues/159).
+    The `read-write` mode is known occasionally to produce some data loss. See [#159](https://github.com/felipenoris/XLSX.jl/issues/159) (now fixed!)
 
-    Simple data should work fine. Users are advised to use this feature with caution when working with formulas and charts.
+    Simple data should work fine. Users are advised to use this feature with caution when working with charts.
 
 ### Export Tabular Data from a Worksheet
 
