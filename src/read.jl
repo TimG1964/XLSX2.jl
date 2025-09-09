@@ -407,7 +407,6 @@ function parse_workbook!(xf::XLSXFile)
                 end
             end
 
-
             break
         end
     end
