@@ -18,6 +18,7 @@
 [docs-stable-url]: https://TimG1964.github.io/XLSX2.jl/stable
 
 Excel file reader/writer for the Julia language.
+This is a fork from [XLSX.jl](https://github.com/felipenoris/XLSX.jl) v0.10.4
 
 ## Introduction
 
