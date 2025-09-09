@@ -53,6 +53,10 @@ Contributions are always welcome!
 To contribute, fork the project on [GitHub](https://github.com/TimG1964/XLSX2.jl)
 and send a Pull Request.
 
+## Acknowledgement
+
+This package was forked from the excellent [XLSX.jl](https://github.com/felipenoris/XLSX.jl) by Felipe Noronha Tavares. Development of the core functionality now in **XLSX2.jl** was undertaken by Felipe and this package would not have been possible without his work. 
+
 ## References
 
 * [ECMA Open XML White Paper](https://www.ecma-international.org/wp-content/uploads/OpenXML-White-Paper.pdf)
