@@ -60,7 +60,7 @@ function writexlsx(output_source::Union{AbstractString,IO}, xf::XLSXFile; overwr
             doc= update_single_sheet!(wb, sheet_no, true)
             f = get_relationship_target_by_id("xl", wb, getsheet(wb, sheet_no).relationship_id)
             ZipArchives.zip_newfile(xlsx, f; compress=true)
-            write(xlsx, XML.write(doc))
+            write(xlsx, doc)
         end
 
         # write binary files
@@ -121,6 +121,39 @@ function generate_sst_xml_string(wb::Workbook)::String
     return String(take!(buff))
 end
 
+function add_node_formula!(io, f::Formula)
+    print(io, "\n        <f")
+    if !isnothing(f.unhandled)
+        for (k, v) in f.unhandled
+            print(io, " ", k, "=\"", v,"\"")
+        end
+    end
+    print(io, ">", XML.escape(f.formula), "</f>")
+end
+
+function add_node_formula!(io, f::FormulaReference)
+    print(io, "\n        <f t=\"shared\"")
+    if !isnothing(f.unhandled)
+        for (k, v) in f.unhandled
+            print(io, " ", k, "=\"", v,"\"")
+        end
+    end
+    print(io," si=\"",string(f.id),"\">")
+    print(io, "</f>")
+end
+
+function add_node_formula!(io, f::ReferencedFormula)
+    print(io, "\n        <f t=\"shared\" ref=\"", f.ref, "\"")
+    if !isnothing(f.unhandled)
+        for (k, v) in f.unhandled
+            print(io, " ", k, "=\"", v,"\"")
+        end
+    end
+    print(io," si=\"",string(f.id),"\">")
+    print(io, XML.escape(f.formula), "</f>")
+end
+
+#=
 function add_node_formula!(node, f::Formula)
     f_node = XML.Element("f", XML.Text(XML.escape(f.formula)))
     if !isnothing(f.unhandled)
@@ -152,7 +185,7 @@ function add_node_formula!(node, f::ReferencedFormula)
     f_node["si"] = string(f.id)
     push!(node, f_node)
 end
-
+=#
 function find_all_nodes(givenpath::String, doc::XML.Node)::Vector{XML.Node}
     XML.nodetype(doc) != XML.Document && throw(XLSXError("Something wrong here!"))
     found_nodes = Vector{XML.Node}()
@@ -266,7 +299,7 @@ function update_worksheets_xml!(xl::XLSXFile; full=false)
     end
     return nothing
 end
-function update_single_sheet!(wb::Workbook, sheet_no::Int, full::Bool)::XML.Node
+function update_single_sheet!(wb::Workbook, sheet_no::Int, full::Bool)::Union{Nothing,Vector{UInt8}}
     sheet = getsheet(wb, sheet_no)
     doc = copynode(get_worksheet_xml_document(sheet))
     xroot = doc[end]
@@ -277,36 +310,42 @@ function update_single_sheet!(wb::Workbook, sheet_no::Int, full::Bool)::XML.Node
 
     if full # need to reconstruct row and cell data from cache
 
-        # update sheetData from cache
-        i, j = get_idces(doc, "worksheet", "sheetData")
-            sheetData_node = XML.Element(XML.tag(doc[i][j]))
-            a = XML.attributes(doc[i][j])
-            if !isnothing(a)
-                for (k, v) in a
-                    sheetData_node[k] = v
-                end
-            end
-
-        # iterates over WorksheetCache cells and writes the XML
-        rows = get_cache_rows(sheet)
-        sort!(rows, by = x -> x[1])
-        for r in rows
-            push!(sheetData_node, r[2])
-        end
-        doc[i][j] = sheetData_node
-
-        # updates worksheet dimension
+        # update worksheet dimension
         i, j = get_idces(doc, "worksheet", "dimension")
         if !isnothing(j)
             dimension_node = doc[i][j]
             dimension_node["ref"] = string(get_dimension(sheet))
-            doc[i][j] = dimension_node
+#            doc[i][j] = dimension_node
         end
+
+        empty_doc=XML.write(doc)
+        idx=findfirst("<sheetData/>", empty_doc)
+        idx === nothing && throw(XLSXError("<sheetData/> placeholder not found"))
+        new_doc=IOBuffer()
+        print(new_doc, empty_doc[begin:first(idx)-1])
+
+        # create <sheetData> with any attributes
+        print(new_doc, "<sheetData")
+        i, j = get_idces(doc, "worksheet", "sheetData")
+        a = XML.attributes(doc[i][j])
+        if !isnothing(a)
+            for (k, v) in a
+                print(new_doc, " ",k,"=\"",v,"\"")
+            end
+        end
+        print(new_doc, ">\n")
+        # iterates over WorksheetCache cells and writes the XML
+        new_doc=vcat(take!(new_doc), get_cache_rows(sheet))
+
+        new_doc=vcat(new_doc, Vector{UInt8}("  </sheetData>"))
+        new_doc=vcat(new_doc, Vector{UInt8}(empty_doc[last(idx)+1:end]))
+
+        return new_doc
+
+    else
+        set_worksheet_xml_document!(sheet, doc) # no need to save full reconstructed data
+        return nothing
     end
-
-    !full && set_worksheet_xml_document!(sheet, doc) # no need to save full reconstructed data
-
-    return doc
 end
 
 function stream_cache_rows(sheet::Worksheet)
@@ -322,7 +361,7 @@ function stream_cache_rows(sheet::Worksheet)
 end
 
 function get_cache_rows(sheet::Worksheet)
-    read_cache_rows = Channel{Tuple{Int64,XML.Node}}(1 << 24)
+    read_cache_rows = Channel{Tuple{Int64,Vector{UInt8}}}(1 << 24)
     cache_rows = stream_cache_rows(sheet)
 
     @sync for _ in 1:Threads.nthreads()
@@ -335,9 +374,71 @@ function get_cache_rows(sheet::Worksheet)
 
     close(read_cache_rows) # after all workers finish
 
-    return collect(read_cache_rows)
+    all_rows=last.(sort(collect(read_cache_rows)))
+    return length(all_rows) == 0 ? Vector{UInt8}() : reduce(vcat, all_rows)
 end
 
+function process_cache_row(cacherow::Tuple{CellRange, XLSX2.SheetRow, Dict{String, String}})
+    pad="  "
+    d, r, unhandled_attributes = cacherow
+    spans_str = string(column_number(d.start), ":", column_number(d.stop))
+
+    row_nr = row_number(r)
+    ordered_column_indexes = sort(collect(keys(r.rowcells)))
+
+    row_node=IOBuffer()
+
+    print(row_node, pad^2,"<row r=\"",string(row_nr), "\"")
+    if spans_str != ""
+        print(row_node, " spans=\"",spans_str, "\"")
+    end
+    if !isnothing(r.ht)
+        print(row_node, " ht=\"",string(r.ht),"\"")
+        print(row_node, " customHeight=\"1\"")
+    end
+
+    if !isempty(unhandled_attributes)
+        for (attribute, value) in unhandled_attributes
+            print(row_node, " ", attribute, "=\"", value, "\"")
+        end
+    end
+    print(row_node, ">\n")
+
+    # add cells to row
+    for c in ordered_column_indexes
+        cell = getcell(r, c)
+        print(row_node,pad^3,"<c r=\"",cell.ref.name,"\"")
+
+        if cell.datatype != ""
+            print(row_node," t=\"",cell.datatype,"\"")
+        end
+
+        if cell.style != ""
+            print(row_node," s=\"",cell.style,"\"")
+        end
+        print(row_node, ">")
+        
+        if !isempty(cell.formula)
+            add_node_formula!(row_node, cell.formula)
+        end
+
+        if cell.datatype == "inlineStr"
+            print(row_node,"\n",pad^4, "<is>\n",pad^5,"<t")
+            print(row_node, (startswith(cell.value, " ") || endswith(cell.value, " ") ? " xml:space=\"preserve\">" : ">"))
+            print(row_node, cell.value,"</t>\n",pad^4, "</is>")
+        elseif cell.value != ""
+            print(row_node,"\n",pad^4,"<v>",XML.escape(cell.value),"</v>")
+        end
+
+        print(row_node,"\n",pad^3,"</c>\n") # end of cell
+
+    end
+
+    print(row_node,pad^2,"</row>\n") # end of row
+
+    return (row_nr, take!(row_node))
+end
+#=
 function process_cache_row(cacherow::Tuple{CellRange, XLSX2.SheetRow, Dict{String, String}})
     d, r, unhandled_attributes = cacherow
     spans_str = string(column_number(d.start), ":", column_number(d.stop))
@@ -384,7 +485,7 @@ function process_cache_row(cacherow::Tuple{CellRange, XLSX2.SheetRow, Dict{Strin
     end
     return (row_nr, row_node)
 end
-
+=#
 function abscell(c::CellRef)
     col, row = split_cellname(c.name)
     return "\$" * col * "\$" * string(row)

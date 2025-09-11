@@ -418,9 +418,11 @@ function process_row(row::XML.LazyNode, handled_attributes::Set{String}, ws::Wor
 
 end
 
+#= Doesn't quite work!
 function first_cache_fill!(ws::Worksheet, lznode::XML.LazyNode, nthreads::Int)
     chunksize=1000
-#    println(chunksize)
+    poolsize=3
+
     handled_attributes = Set{String}([
         "r",     # the row number
         "spans", # the columns the row spans
@@ -434,50 +436,142 @@ function first_cache_fill!(ws::Worksheet, lznode::XML.LazyNode, nthreads::Int)
         throw(XLSXError("Expecting empty cache but cache not empty!"))
     end
 
-    sheet_rows = Channel{Tuple{Int, SheetRow, Dict{String,String}}}(1 << 20)
+    # Channel carries (thread_id, buffer_index, valid_count)
+    sheet_rows = Channel{Tuple{Int, Int, Int}}(32)
+
+    # Preallocate buffer pools per thread
+    buffers = ntuple(_ -> [Vector{Tuple{Int, SheetRow, Dict{String,String}}}(undef, chunksize) for _ in 1:poolsize],
+                     Val(nthreads))
+
+    # Flags to track buffer ownership
+    in_use = [fill(false, poolsize) for _ in 1:nthreads]
+
+    consumer = @async begin
+        sst_total = 0
+        unhandled_attributes = Dict{Int, Dict{String,String}}()
+
+        for (tid, buf_idx, count) in sheet_rows
+            buf = buffers[tid][buf_idx]
+            @inbounds for i in 1:count
+                row_sst_count, sheet_row, unatt = buf[i]
+                if !isempty(unatt)
+                    unhandled_attributes[row_number(sheet_row)] = unatt
+                end
+                push_sheetrow!(ws.cache, sheet_row)
+                sst_total += row_sst_count
+            end
+            # Mark buffer free
+            in_use[tid][buf_idx] = false
+        end
+
+        ws.sst_count = sst_total
+        ws.unhandled_attributes = isempty(unhandled_attributes) ? nothing : unhandled_attributes
+    end
+
+    streamed_rows = stream_rows(lznode)
+
+    @sync begin
+        # Producer tasks
+        for tid in 1:nthreads
+            Threads.@spawn begin
+                pool = buffers[tid]
+                flags = in_use[tid]
+                buf_idx = 1
+                chunk = pool[buf_idx]
+                row_count = 0
+
+                for row in streamed_rows
+                    row_count += 1
+                    chunk[row_count] = process_row(row, handled_attributes, ws)
+
+                    if row_count == chunksize
+                        # Wait until buffer is free
+                        while flags[buf_idx]
+                            yield()
+                        end
+                        flags[buf_idx] = true
+                        put!(sheet_rows, (tid, buf_idx, row_count))
+                        buf_idx = buf_idx % poolsize + 1
+                        chunk = pool[buf_idx]
+                        row_count = 0
+                    end
+                end
+
+                if row_count > 0
+                    while flags[buf_idx]
+                        yield()
+                    end
+                    flags[buf_idx] = true
+                    put!(sheet_rows, (tid, buf_idx, row_count))
+                end
+            end
+        end
+    end
+
+    close(sheet_rows)
+    wait(consumer)
+
+    ws.cache.is_full=true
+
+end
+=#
+
+function first_cache_fill!(ws::Worksheet, lznode::XML.LazyNode, nthreads::Int)
+    chunksize=1000
+    handled_attributes = Set{String}([
+        "r",            # the row number
+        "spans",        # the columns the row spans
+        "ht",           # the row height
+        "customHeight"  # flag for when custom height defined
+    ])
+    unhandled_attributes = Dict{Int,Dict{String,String}}() # Row number => (name, value)
+
+    if ws.cache === nothing
+        ws.cache = WorksheetCache(ws)
+    else
+        throw(XLSXError("Expecting empty cache but cache not empty!"))
+    end
+
+    sheet_rows = Channel{Vector{Tuple{Int, SheetRow, Dict{String,String}}}}(1 << 20)
 
     consumer = @async begin
         sst_total=0
-        for (row_sst_count, sheet_row, unatt) in sheet_rows
-            if !isempty(unatt)
-                unhandled_attributes[row_number(sheet_row)] = unatt
+        for rows in sheet_rows
+            for (row_sst_count, sheet_row, unatt) in rows
+                if !isempty(unatt)
+                    unhandled_attributes[row_number(sheet_row)] = unatt
+                end
+                push_sheetrow!(ws.cache, sheet_row)
+                sst_total += row_sst_count
             end
-            push_sheetrow!(ws.cache, sheet_row)
-            sst_total += row_sst_count
         end
         ws.sst_count = sst_total
         ws.unhandled_attributes = isempty(unhandled_attributes) ? nothing : unhandled_attributes
     end
 
-    rows = stream_rows(lznode)
+    streamed_rows = stream_rows(lznode)
 
     # Producer tasks
     @sync for _ in 1:nthreads
         Threads.@spawn begin
             chunk=Vector{Tuple{Int, SheetRow, Dict{String,String}}}(undef, chunksize)
             row_count=0
-            for row in rows
-#                sheetrow = process_row(row, handled_attributes, ws) # process <row> LazyNodes into SheetRows
-#                put!(sheet_rows, sheetrow)
+            for row in streamed_rows
                 row_count += 1
                 chunk[row_count] = process_row(row, handled_attributes, ws) # process <row> LazyNodes into SheetRows
                 if row_count == chunksize
-                    for r in 1:chunksize
-                        put!(sheet_rows, chunk[r])
-                    end
+                    put!(sheet_rows, copy(chunk))
                     row_count=0
                 end
             end
             if row_count>0 # handle last incomplete chunk
-                for r in 1:row_count
-                    put!(sheet_rows, chunk[r])
-                end
+                put!(sheet_rows, chunk[1:row_count])
             end
         end
     end
     close(sheet_rows)
 
-    wait(consumer)
+    wait(consumer) # ensure consumer is done
 
     ws.cache.is_full=true
 end

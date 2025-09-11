@@ -72,13 +72,13 @@ function Cell(c::XML.LazyNode)
             if XML.tag(c_child_element) == "is"
                 t_node = find_t_node_recursively(c_child_element)
                 if t_node !== nothing
-                    c = XML.children(t_node)
-                    if length(c) == 0
+                    tc = XML.children(t_node)
+                    if length(tc) == 0
                         v = ""
-                    elseif length(c) == 1
-                        v= XML.value(c[1])
+                    elseif length(tc) == 1
+                        v= XML.value(tc[1])
                     else
-                        throw(XLSXError("Too amny children in `t` node. Expected >=1, found: $(length(c))"))
+                        throw(XLSXError("Too many children in `t` node. Expected <=1, found: $(length(tc))"))
                     end
                 end
             end
